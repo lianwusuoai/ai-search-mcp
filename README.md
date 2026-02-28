@@ -23,7 +23,7 @@
 
 | 特性 | Python 版本 | Rust 版本 |
 |------|------------|-----------|
-| 多维度搜索 | 顺序执行 (~3s) | 并发执行 (~1s) |
+| 多维度搜索 | 顺序执行 (~60s每次) | 并发执行 (一共60s) |
 | 启动时间 | ~200ms | ~10ms |
 | 内存占用 | 中等 | 低 (零拷贝) |
 | 流式响应 | iter_lines | Stream trait |
@@ -42,14 +42,7 @@ uvx ai-search-mcp
 pip install ai-search-mcp
 ```
 
-### 方式二：下载预编译二进制文件
-
-从 [Releases](https://github.com/lianwusuoai/ai-search-mcp/releases) 页面下载对应平台的二进制文件：
-- Windows: `ai-search-mcp.exe`
-- Linux: `ai-search-mcp-linux`
-- macOS: `ai-search-mcp-macos`
-
-### 方式三：从源码编译
+### 方式二：从源码编译
 
 ```bash
 # 克隆仓库
@@ -62,6 +55,25 @@ cargo build --release
 # 二进制文件位于
 ./target/release/ai-search-mcp
 ```
+
+## 更新
+
+```bash
+# 使用 pip 更新
+pip install --upgrade ai-search-mcp
+
+# 使用 uvx 会自动使用最新版本
+uvx ai-search-mcp
+```
+
+## 卸载
+
+```bash
+# 使用 pip 卸载
+pip uninstall ai-search-mcp
+
+# uvx 不需要卸载，每次运行都是独立环境
+
 
 #### 跨平台编译
 
