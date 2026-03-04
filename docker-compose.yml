@@ -1,0 +1,44 @@
+services:
+  ai-search:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-search
+    restart: always
+    ports:
+      - "11000:11000"
+    volumes:
+      # 挂载配置文件目录（读写权限，程序可能需要创建锁文件）
+      - ~/.ai-search-mcp:/root/.ai-search-mcp
+    
+    # 设置时区为北京时间
+    environment:
+      - TZ=Asia/Shanghai
+    
+    # 如需连接到其他 Docker 网络（如 Cloudflare Tunnel），请创建 docker-compose.override.yml
+    # 示例：
+    # services:
+    #   ai-search:
+    #     networks:
+    #       - lianwusuoai-network
+    # networks:
+    #   lianwusuoai-network:
+    #     external: true
+    
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    
+    # 资源限制（可选）
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M

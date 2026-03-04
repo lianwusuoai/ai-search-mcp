@@ -20,9 +20,7 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
 develop-eggs/
-dist/
 downloads/
 eggs/
 .eggs/
@@ -32,10 +30,16 @@ parts/
 sdist/
 var/
 wheels/
-*.egg-info/
 .installed.cfg
 *.egg
-tests/
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Build artifacts
+artifacts/
 
 # IDE
 .vscode/
@@ -47,3 +51,26 @@ tests/
 # OS
 .DS_Store
 Thumbs.db
+.AppleDouble
+.LSOverride
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.directory
+.Trash-*
+
+# Docker local overrides
+docker-compose.override.yml
+
+# Local debug and test files
+debug/
+docs/
+tests/
+
+# User configuration
+~/.ai-search-mcp/
+
+# Temporary files
+*.tmp
+*.temp
+*.log

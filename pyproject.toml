@@ -32,6 +32,10 @@ Issues = "https://github.com/lianwusuoai/ai-search-mcp/issues"
 
 [project.scripts]
 ai-search-mcp = "ai_search_mcp:main"
+ai-search-mcp-deploy = "ai_search_mcp.deploy:main"
+
+[tool.hatch.version]
+path = "ai_search_mcp/__about__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["ai_search_mcp"]
@@ -48,7 +52,3 @@ include = [
     "/README.md",
     "/LICENSE",
 ]
-
-[tool.hatch.version]
-source = "code"
-path = "ai_search_mcp/__about__.py"
