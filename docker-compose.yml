@@ -14,12 +14,14 @@ services:
     # 设置时区为北京时间
     environment:
       - TZ=Asia/Shanghai
+      - RUST_LOG=debug
     
     # 如需连接到其他 Docker 网络（如 Cloudflare Tunnel），请创建 docker-compose.override.yml
     # 示例：
     # services:
     #   ai-search:
     #     networks:
+    #       - default  
     #       - lianwusuoai-network
     # networks:
     #   lianwusuoai-network:

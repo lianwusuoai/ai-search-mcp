@@ -35,28 +35,28 @@ pub async fn search_handler(
     Query(_params): Query<HashMap<String, String>>,
     Json(payload): Json<SearchRequest>,
 ) -> Result<Json<SearchResponse>, AppError> {
-    let request_id = uuid::Uuid::new_v4().to_string();
-    
     // 验证请求
     let query = payload.query.trim();
     
     if query.is_empty() {
-        tracing::warn!("空查询 [{}]", request_id);
+        tracing::warn!("空查询");
         return Err(AppError::InvalidRequest("查询不能为空".to_string()));
     }
     
-    // 限制查询长度（防止滥用）
-    const MAX_QUERY_LENGTH: usize = 10000;
-    if query.len() > MAX_QUERY_LENGTH {
-        tracing::warn!("查询过长: {} 字符 [{}]", query.len(), request_id);
+    // 从配置读取查询长度限制
+    let config = state.config.read().await;
+    let max_query_length = config.max_query_length;
+    
+    if query.len() > max_query_length {
+        tracing::warn!("查询过长: {} 字符", query.len());
         return Err(AppError::InvalidRequest(
-            format!("查询长度不能超过 {} 字符", MAX_QUERY_LENGTH)
+            format!("查询长度不能超过 {} 字符", max_query_length)
         ));
     }
     
     // 检查潜在的恶意内容
     if query.contains("<script>") || query.contains("javascript:") {
-        tracing::warn!("检测到潜在恶意内容 [{}]", request_id);
+        tracing::warn!("检测到潜在恶意内容");
         return Err(AppError::InvalidRequest("查询包含非法字符".to_string()));
     }
     
@@ -66,9 +66,8 @@ pub async fn search_handler(
     match ai_client.search(query).await {
         Ok(result) => {
             let duration_ms = start.elapsed().as_millis() as u64;
-            tracing::info!("搜索完成: {} ms [{}]", duration_ms, request_id);
+            tracing::debug!("搜索完成: {} ms", duration_ms);
             
-            let config = state.config.read().await;
             // 判断是否有子查询
             let sub_queries = if config.max_query_plan > 1 {
                 Some(config.max_query_plan as usize)
@@ -86,7 +85,7 @@ pub async fn search_handler(
             }))
         }
         Err(e) => {
-            tracing::error!("搜索失败: {} [{}]", e, request_id);
+            tracing::error!("搜索失败: {}", e);
             Err(AppError::SearchError(e.to_string()))
         }
     }
@@ -99,28 +98,28 @@ pub async fn search_stream_handler(
     Query(_params): Query<HashMap<String, String>>,
     Json(payload): Json<SearchRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
-    let request_id = uuid::Uuid::new_v4().to_string();
-    
     // 验证请求
     let query = payload.query.trim();
     
     if query.is_empty() {
-        tracing::warn!("空查询 [{}]", request_id);
+        tracing::warn!("空查询");
         return Err(AppError::InvalidRequest("查询不能为空".to_string()));
     }
     
-    // 限制查询长度
-    const MAX_QUERY_LENGTH: usize = 10000;
-    if query.len() > MAX_QUERY_LENGTH {
-        tracing::warn!("查询过长: {} 字符 [{}]", query.len(), request_id);
+    // 从配置读取查询长度限制
+    let config = state.config.read().await;
+    let max_query_length = config.max_query_length;
+    
+    if query.len() > max_query_length {
+        tracing::warn!("查询过长: {} 字符", query.len());
         return Err(AppError::InvalidRequest(
-            format!("查询长度不能超过 {} 字符", MAX_QUERY_LENGTH)
+            format!("查询长度不能超过 {} 字符", max_query_length)
         ));
     }
     
     // 检查潜在的恶意内容
     if query.contains("<script>") || query.contains("javascript:") {
-        tracing::warn!("检测到潜在恶意内容 [{}]", request_id);
+        tracing::warn!("检测到潜在恶意内容");
         return Err(AppError::InvalidRequest("查询包含非法字符".to_string()));
     }
     
@@ -129,7 +128,7 @@ pub async fn search_stream_handler(
     
     // 克隆需要的数据
     let ai_client = state.ai_client.read().await.clone();
-    let config = state.config.read().await.clone();
+    let config_clone = config.clone();
     let query_owned = query.to_string();
     let search_tx = tx.clone();
     
@@ -139,8 +138,8 @@ pub async fn search_stream_handler(
         
         let start = Instant::now();
         
-        // 执行搜索
-        match ai_client.search(&query_owned).await {
+        // 执行搜索（使用带进度的版本）
+        match ai_client.search_with_progress(&query_owned, Some(search_tx.clone())).await {
             Ok(result) => {
                 // 推送结果事件
                 let _ = search_tx.send(Ok(SseEventBuilder::result(0, &result))).await;
@@ -150,13 +149,13 @@ pub async fn search_stream_handler(
                 let _ = search_tx.send(Ok(SseEventBuilder::complete(
                     1,
                     duration_ms,
-                    &config.search_model_id,
+                    &config_clone.search_model_id,
                     &Utc::now().to_rfc3339(),
                 ))).await;
             }
             Err(e) => {
                 // 推送错误事件
-                tracing::error!("SSE 搜索失败: {} [{}]", e, request_id);
+                tracing::error!("SSE 搜索失败: {}", e);
                 let _ = search_tx.send(Ok(SseEventBuilder::error(
                     &e.to_string(),
                     "SEARCH_ERROR",
@@ -166,7 +165,7 @@ pub async fn search_stream_handler(
     });
     
     // 启动心跳任务
-    let heartbeat_interval = state.config.read().await.http_sse_heartbeat;
+    let heartbeat_interval = config.http_sse_heartbeat;
     tokio::spawn(heartbeat_task(tx, heartbeat_interval));
     
     // 返回事件流

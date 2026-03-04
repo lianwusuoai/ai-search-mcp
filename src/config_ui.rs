@@ -113,6 +113,9 @@ async fn get_config_handler(jar: CookieJar, State(state): State<Arc<AppState>>) 
                 log_level: "INFO".to_string(),
                 max_query_plan: 10,
                 http_api_key: "xinchen".to_string(),
+                http_max_body_size: Some(10 * 1024 * 1024),
+                max_buffer_size: Some(10 * 1024 * 1024),
+                max_query_length: Some(10000),
                 admin_password: "xinchen".to_string(),
                 system_prompt: None,
                 split_prompt: None,
@@ -139,6 +142,9 @@ struct SaveConfigRequest {
     admin_password: String,
     system_prompt: Option<String>,
     split_prompt: Option<String>,
+    http_max_body_size: Option<usize>,
+    max_buffer_size: Option<usize>,
+    max_query_length: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -177,6 +183,9 @@ async fn save_config_handler(
         timeout: req.timeout,
         stream: req.stream,
         filter_thinking: req.filter_thinking,
+        http_max_body_size: req.http_max_body_size,
+        max_buffer_size: req.max_buffer_size,
+        max_query_length: req.max_query_length,
         retry_count: 1, // 保持兼容性,使用固定值
         analysis_retry_count: req.analysis_retry_count,
         search_retry_count: req.search_retry_count,
@@ -334,6 +343,9 @@ async fn login_handler(
                 search_model_id: "Grok".to_string(),
                 analysis_model_id: None,
                 timeout: 60,
+                http_max_body_size: Some(10 * 1024 * 1024),
+                max_buffer_size: Some(10 * 1024 * 1024),
+                max_query_length: Some(10000),
                 stream: true,
                 filter_thinking: true,
                 retry_count: 1,

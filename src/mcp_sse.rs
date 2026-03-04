@@ -24,8 +24,17 @@ pub async fn mcp_sse_handler(
         })?;
     
     let session_id = Uuid::new_v4().to_string();
-    tracing::info!("MCP SSE 连接建立 (session_id: {}, 当前连接数: {})", 
-        session_id, state.sse_pool.current_count());
+    
+    // 使用全局静态变量跟踪上一次的连接数，只在变化时记录
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static LAST_CONNECTION_COUNT: AtomicUsize = AtomicUsize::new(0);
+    
+    let current_count = state.sse_pool.current_count();
+    let last_count = LAST_CONNECTION_COUNT.swap(current_count, Ordering::Relaxed);
+    
+    if current_count != last_count {
+        tracing::info!("MCP SSE 连接数变化: {} -> {}", last_count, current_count);
+    }
     
     let config = state.config.read().await;
     let channel_capacity = config.http_mcp_channel_capacity;
@@ -66,9 +75,9 @@ pub async fn mcp_sse_handler(
         .data(initialize_response.to_string());
     
     if let Err(e) = tx.send(Ok(initialize_event)).await {
-        tracing::error!("发送 initialize 响应失败: {}", e);
+        tracing::warn!("发送 initialize 响应失败（客户端可能已断开）: {}", e);
     } else {
-        tracing::debug!("自动发送 initialize 响应 (session: {})", session_id);
+        tracing::trace!("自动发送 initialize 响应");
     }
     
     // 3. 自动发送 tools/list 响应
@@ -100,9 +109,9 @@ pub async fn mcp_sse_handler(
         .data(tools_list_response.to_string());
     
     if let Err(e) = tx.send(Ok(tools_event)).await {
-        tracing::error!("发送 tools/list 响应失败: {}", e);
+        tracing::warn!("发送 tools/list 响应失败（客户端可能已断开）: {}", e);
     } else {
-        tracing::debug!("自动发送 tools/list 响应 (session: {})", session_id);
+        tracing::trace!("自动发送 tools/list 响应");
     }
     
     // 4. 启动心跳任务（使用 SSE 注释格式，符合标准）
@@ -128,17 +137,22 @@ pub async fn mcp_sse_handler(
                 .comment(&comment);
             
             if tx.send(Ok(ping_event)).await.is_err() {
-                tracing::info!("MCP SSE 连接已关闭 (session_id: {}, 存活时间: ~{}秒)", 
-                    session_id_clone, ping_count * heartbeat_interval);
+                tracing::info!("MCP SSE 连接关闭 (存活: ~{}秒)", 
+                    ping_count * heartbeat_interval);
                 sessions.remove_session(&session_id_clone);
                 break;
             }
             
-            tracing::debug!("发送心跳 #{} (session: {})", ping_count, session_id_clone);
+            tracing::trace!("心跳 #{}", ping_count);
         }
     });
     
-    // 不使用 keep_alive，因为我们已经有心跳任务了
-    // keep_alive 会发送注释，可能与心跳冲突
-    Ok(Sse::new(ReceiverStream::new(rx)))
+    // 使用 keep_alive 确保连接保持活跃并立即刷新初始事件
+    // 设置较长的间隔，因为我们有自己的心跳任务
+    Ok(Sse::new(ReceiverStream::new(rx))
+        .keep_alive(
+            axum::response::sse::KeepAlive::new()
+                .interval(std::time::Duration::from_secs(heartbeat_interval))
+                .text("ping")
+        ))
 }

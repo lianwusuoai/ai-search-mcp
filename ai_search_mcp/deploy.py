@@ -143,7 +143,7 @@ def deploy(force: bool = False, stop: bool = False) -> int:
     return 0
 
 
-def main():
+def main() -> int:
     """主函数"""
     parser = argparse.ArgumentParser(
         description="AI Search MCP - Docker 部署管理工具"

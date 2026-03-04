@@ -18,7 +18,7 @@ pub const DEFAULT_SYSTEM_PROMPT: &str = r#"你是一个专业的搜索助手,擅
 4. 对于技术问题,优先参考官方文档和最新版本
 
 输出要求:
-- 直接回答用户问题
+- 尽可能全面详细没有遗漏的回答用户问题
 - 时间相关信息必须基于上述当前时间判断"#;
 
 pub const DEFAULT_SPLIT_PROMPT: &str = "你是查询拆分助手。只返回 JSON 数组，不要任何解释、标记或其他文本。直接输出 JSON 数组。";
@@ -46,6 +46,9 @@ pub struct AIConfig {
     pub http_max_body_size: usize,
     pub http_mcp_channel_capacity: usize,
     pub http_session_timeout: u64,
+    // 请求限制配置（可通过 Web UI 修改）
+    pub max_buffer_size: usize,
+    pub max_query_length: usize,
 }
 
 impl std::fmt::Debug for AIConfig {
@@ -71,6 +74,8 @@ impl std::fmt::Debug for AIConfig {
             .field("http_max_body_size", &self.http_max_body_size)
             .field("http_mcp_channel_capacity", &self.http_mcp_channel_capacity)
             .field("http_session_timeout", &self.http_session_timeout)
+            .field("max_buffer_size", &self.max_buffer_size)
+            .field("max_query_length", &self.max_query_length)
             .finish()
     }
 }
@@ -96,9 +101,11 @@ impl From<ConfigFile> for AIConfig {
             // HTTP/SSE 默认值（心跳间隔 5 秒，防止客户端超时）
             http_sse_heartbeat: 5,
             http_max_sse_connections: 100,
-            http_max_body_size: 10 * 1024 * 1024,
+            http_max_body_size: config_file.http_max_body_size.unwrap_or(10 * 1024 * 1024),
             http_mcp_channel_capacity: 100,
             http_session_timeout: 1800,
+            max_buffer_size: config_file.max_buffer_size.unwrap_or(10 * 1024 * 1024),
+            max_query_length: config_file.max_query_length.unwrap_or(10000),
         }
     }
 }
@@ -213,6 +220,16 @@ impl AIConfig {
             .and_then(|v| v.parse().ok())
             .unwrap_or(1800); // 默认 30 分钟
         
+        let max_buffer_size = env::var("AI_MAX_BUFFER_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10 * 1024 * 1024); // 默认 10MB
+        
+        let max_query_length = env::var("AI_MAX_QUERY_LENGTH")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10000); // 默认 10000 字符
+        
         let config = Self {
             api_url,
             api_key,
@@ -234,6 +251,8 @@ impl AIConfig {
             http_max_body_size,
             http_mcp_channel_capacity,
             http_session_timeout,
+            max_buffer_size,
+            max_query_length,
         };
         
         config.validate()?;
@@ -241,21 +260,63 @@ impl AIConfig {
     }
     
     fn validate(&self) -> Result<()> {
+        // 验证 API URL
+        if self.api_url.is_empty() {
+            return Err(AISearchError::Config("API URL 不能为空".into()));
+        }
+        
         if !self.api_url.starts_with("http://") && !self.api_url.starts_with("https://") {
             return Err(AISearchError::Config(
                 format!("API URL 必须以 http:// 或 https:// 开头: {}", self.api_url)
             ));
         }
         
+        // 验证 API Key
+        if self.api_key.is_empty() {
+            return Err(AISearchError::Config("API Key 不能为空".into()));
+        }
+        
+        // 验证模型 ID
+        if self.search_model_id.is_empty() {
+            return Err(AISearchError::Config("搜索模型 ID 不能为空".into()));
+        }
+        
+        if let Some(ref analysis_model) = self.analysis_model_id {
+            if analysis_model.is_empty() {
+                return Err(AISearchError::Config("分析模型 ID 不能为空（如果设置）".into()));
+            }
+        }
+        
+        // 验证系统提示词中的占位符
+        if !self.system_prompt.contains("{current_time}") {
+            tracing::warn!("系统提示词中缺少 {{current_time}} 占位符，时间注入功能将不可用");
+        }
+        
+        // 验证超时时间
         if self.timeout < 1 || self.timeout > 300 {
             return Err(AISearchError::Config(
                 format!("超时时间必须在 1-300 秒之间: {}", self.timeout)
             ));
         }
         
+        // 验证查询拆分数量
         if self.max_query_plan < 1 || self.max_query_plan > 1000 {
             return Err(AISearchError::Config(
                 format!("最大子查询数必须在 1-1000 之间: {}", self.max_query_plan)
+            ));
+        }
+        
+        // 验证缓冲区大小
+        if self.max_buffer_size < 1024 * 1024 || self.max_buffer_size > 100 * 1024 * 1024 {
+            return Err(AISearchError::Config(
+                format!("最大缓冲区大小必须在 1MB-100MB 之间: {} bytes", self.max_buffer_size)
+            ));
+        }
+        
+        // 验证查询长度
+        if self.max_query_length < 100 || self.max_query_length > 100000 {
+            return Err(AISearchError::Config(
+                format!("最大查询长度必须在 100-100000 字符之间: {}", self.max_query_length)
             ));
         }
         

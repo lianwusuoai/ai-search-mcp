@@ -186,6 +186,7 @@ pub struct AppState {
     pub sse_pool: Arc<crate::sse::SseConnectionPool>,
     pub mcp_sessions: Arc<McpSessionManager>,
     pub start_time: std::time::Instant,
+    cleanup_shutdown: tokio::sync::watch::Sender<bool>,
 }
 
 impl AppState {
@@ -193,15 +194,27 @@ impl AppState {
         let sse_pool = Arc::new(crate::sse::SseConnectionPool::new(config.http_max_sse_connections));
         let mcp_sessions = Arc::new(McpSessionManager::new());
         
-        // 启动全局会话清理任务
+        // 创建关闭信号通道
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+        
+        // 启动全局会话清理任务（可优雅关闭）
         let sessions_for_cleanup = mcp_sessions.clone();
         let session_timeout = config.http_session_timeout;
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(session_timeout / 3)).await;
-                let removed = sessions_for_cleanup.cleanup_expired(session_timeout);
-                if removed > 0 {
-                    tracing::info!("全局清理: 清理了 {} 个过期会话", removed);
+                tokio::select! {
+                    _ = tokio::time::sleep(tokio::time::Duration::from_secs(session_timeout / 3)) => {
+                        let removed = sessions_for_cleanup.cleanup_expired(session_timeout);
+                        if removed > 0 {
+                            tracing::info!("全局清理: 清理了 {} 个过期会话", removed);
+                        }
+                    }
+                    _ = shutdown_rx.changed() => {
+                        if *shutdown_rx.borrow() {
+                            tracing::info!("会话清理任务收到关闭信号，正在退出...");
+                            break;
+                        }
+                    }
                 }
             }
         });
@@ -212,6 +225,7 @@ impl AppState {
             sse_pool,
             mcp_sessions,
             start_time: std::time::Instant::now(),
+            cleanup_shutdown: shutdown_tx,
         }
     }
     
@@ -231,6 +245,14 @@ impl AppState {
         
         tracing::info!("配置已成功重新加载");
         Ok(())
+    }
+}
+
+impl Drop for AppState {
+    fn drop(&mut self) {
+        // 发送关闭信号给清理任务
+        let _ = self.cleanup_shutdown.send(true);
+        tracing::info!("AppState 正在清理资源...");
     }
 }
 

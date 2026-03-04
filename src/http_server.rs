@@ -12,7 +12,7 @@ use crate::config::AIConfig;
 use crate::client::AIClient;
 use crate::handlers::{health_handler, search_handler, search_stream_handler};
 use crate::mcp_sse::mcp_sse_handler;
-use crate::mcp_handler::mcp_handler;
+use crate::mcp_handler::{mcp_handler, mcp_http_handler};
 use crate::middleware::{auth_middleware, cors_layer, logging_middleware};
 use crate::models::AppState;
 use crate::config_ui;
@@ -59,7 +59,8 @@ impl HttpServer {
         // MCP 和 API 路由（需要认证）
         let protected_router = Router::new()
             .route("/sse", get(mcp_sse_handler))
-            .route("/mcp", post(mcp_handler))
+            .route("/mcp", post(mcp_handler))  // SSE 模式（需要 session）
+            .route("/http", post(mcp_http_handler))  // HTTP 模式（简化路径）
             .route("/api/search", post(search_handler))
             .route("/api/search/stream", post(search_stream_handler))
             .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))

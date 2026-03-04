@@ -64,8 +64,10 @@ impl AIClient {
     pub fn new(config: AIConfig) -> Result<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(config.timeout))
-            .pool_max_idle_per_host(100)
-            .pool_idle_timeout(Duration::from_secs(90))
+            .pool_max_idle_per_host(1000)  // 每个主机最多保持1000个空闲连接
+            .tcp_keepalive(Duration::from_secs(60))  // TCP keepalive 60秒
+            .http2_keep_alive_interval(Duration::from_secs(30))  // HTTP/2 keepalive 30秒
+            .http2_keep_alive_timeout(Duration::from_secs(10))  // HTTP/2 keepalive 超时10秒
             .build()?;
         
         Ok(Self { config, client })
@@ -103,6 +105,14 @@ impl AIClient {
     }
     
     pub async fn search(&self, query: &str) -> Result<String> {
+        self.search_with_progress(query, None).await
+    }
+    
+    pub async fn search_with_progress(
+        &self,
+        query: &str,
+        tx: Option<tokio::sync::mpsc::Sender<std::result::Result<axum::response::sse::Event, std::convert::Infallible>>>,
+    ) -> Result<String> {
         let is_sub_query = query.starts_with("[SUB_QUERY]");
         
         if is_sub_query {
@@ -115,26 +125,70 @@ impl AIClient {
             info!("多维度搜索: 并发执行 {} 个子查询", self.config.max_query_plan);
             
             // 1. 拆分查询
+            let split_start = std::time::Instant::now();
             let sub_queries = self.split_query(query, self.config.max_query_plan).await?;
+            let split_duration = split_start.elapsed();
             info!("拆分完成: {:?}", sub_queries);
+            
+            // 推送拆分完成事件
+            if let Some(ref tx) = tx {
+                let event = crate::sse::SseEventBuilder::split_complete(&sub_queries, split_duration.as_millis() as u64);
+                let _ = tx.send(Ok(event)).await;
+            }
             
             // 2. 并发执行所有子查询
             tracing::debug!("开始并发执行 {} 个子查询", sub_queries.len());
             let start_time = std::time::Instant::now();
+            let total_count = sub_queries.len();
+            
+            // 使用 Arc 共享完成和失败计数器
+            let completed_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let failed_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             
             // 预先创建所有任务句柄，确保同时启动
             let mut search_futures = Vec::with_capacity(sub_queries.len());
             for (i, sub_query) in sub_queries.iter().enumerate() {
                 let query = sub_query.clone();
                 let client = self.clone();
+                let index = i + 1;
+                let completed = completed_count.clone();
+                let failed = failed_count.clone();
+                let progress_tx = tx.clone();
+                let progress_start = start_time;
+                let spawn_time = std::time::Instant::now();
                 let task = tokio::spawn(async move {
-                    let result = client.search_internal(&query).await;
+                    let task_start = std::time::Instant::now();
+                    let result = client.search_internal_with_index(&query, index).await;
+                    let task_duration = task_start.elapsed();
+                    
+                    // 更新计数器
+                    let is_success = result.is_ok();
+                    let current_completed = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                    if !is_success {
+                        failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    
+                    // 立即推送进度事件
+                    if let Some(ref tx) = progress_tx {
+                        let current_failed = failed.load(std::sync::atomic::Ordering::Relaxed);
+                        let elapsed = progress_start.elapsed();
+                        let event = crate::sse::SseEventBuilder::progress(
+                            current_completed,
+                            total_count,
+                            current_failed,
+                            elapsed.as_millis() as u64
+                        );
+                        let _ = tx.send(Ok(event)).await;
+                    }
+                    
+                    tracing::info!("子查询 {} 完成，耗时 {:.2}s", index, task_duration.as_secs_f64());
                     result
                 });
-                tracing::debug!("已启动子查询 {}", i + 1);
+                tracing::debug!("已启动子查询 {}，spawn 耗时 {:.3}s", i + 1, spawn_time.elapsed().as_secs_f64());
                 search_futures.push(task);
             }
             
+            tracing::debug!("所有子查询任务已创建，开始等待结果...");
             let results: Vec<Result<String>> = futures::future::join_all(search_futures)
                 .await
                 .into_iter()
@@ -179,13 +233,17 @@ impl AIClient {
         self.call_api(query).await
     }
     
-    /// 内部搜索方法，用于递归调用
-    async fn search_internal(&self, query: &str) -> Result<String> {
+    /// 内部搜索方法（带索引），用于并发调用时显示序号
+    async fn search_internal_with_index(&self, query: &str, index: usize) -> Result<String> {
         let is_sub_query = query.starts_with("[SUB_QUERY]");
         
         if is_sub_query {
             let actual_query = query.trim_start_matches("[SUB_QUERY]").trim();
-            info!("子查询直接搜索: {}", actual_query);
+            if index > 0 {
+                info!("子查询 {}: {}", index, actual_query);
+            } else {
+                info!("子查询直接搜索: {}", actual_query);
+            }
             return self.call_api(actual_query).await;
         }
         
@@ -315,9 +373,10 @@ impl AIClient {
     }
     
     async fn handle_streaming_response(&self, response: reqwest::Response) -> Result<String> {
-        const MAX_BUFFER_SIZE: usize = 10 * 1024 * 1024; // 10MB
-        const MAX_CHUNKS_SIZE: usize = 10 * 1024 * 1024; // 10MB
-        const MAX_LINE_BUFFER_SIZE: usize = 1024 * 1024; // 1MB - 防止单行过大
+        // 从配置读取缓冲区大小限制
+        let max_buffer_size = self.config.max_buffer_size;
+        let max_chunks_size = self.config.max_buffer_size;
+        let max_line_buffer_size = self.config.max_buffer_size / 10; // 单行最大为总缓冲区的 1/10
         
         let mut stream = response.bytes_stream();
         let mut chunks = Vec::new();
@@ -329,9 +388,9 @@ impl AIClient {
             let new_content = String::from_utf8_lossy(&chunk);
             
             // 在添加前检查大小,避免内存峰值
-            if buffer.len() + new_content.len() > MAX_BUFFER_SIZE {
+            if buffer.len() + new_content.len() > max_buffer_size {
                 return Err(AISearchError::Protocol(
-                    format!("单次响应缓冲区过大，超过 {} MB 限制", MAX_BUFFER_SIZE / 1024 / 1024)
+                    format!("单次响应缓冲区过大，超过 {} MB 限制", max_buffer_size / 1024 / 1024)
                 ));
             }
             
@@ -353,9 +412,9 @@ impl AIClient {
                                 if let Some(content) = &delta.content {
                                     // 检查累积内容大小
                                     chunks_total_size += content.len();
-                                    if chunks_total_size > MAX_CHUNKS_SIZE {
+                                    if chunks_total_size > max_chunks_size {
                                         return Err(AISearchError::Protocol(
-                                            format!("响应内容过大，超过 {} MB 限制", MAX_CHUNKS_SIZE / 1024 / 1024)
+                                            format!("响应内容过大，超过 {} MB 限制", max_chunks_size / 1024 / 1024)
                                         ));
                                     }
                                     chunks.push(content.clone());
@@ -369,7 +428,7 @@ impl AIClient {
             }
             
             // 防止 buffer 无限增长（没有换行符的情况）
-            if buffer.len() > MAX_LINE_BUFFER_SIZE {
+            if buffer.len() > max_line_buffer_size {
                 tracing::warn!("行缓冲区过大（{}字节），可能缺少换行符，清空缓冲区", buffer.len());
                 buffer.clear();
             }
@@ -486,12 +545,24 @@ impl AIClient {
         
         tracing::debug!("清理后的响应: {}", cleaned);
         
-        // 解析 JSON 数组
-        let sub_queries: Vec<String> = serde_json::from_str(cleaned)
-            .map_err(|e| {
-                error!("JSON 解析失败，原始响应: {}", filtered);
-                AISearchError::Protocol(format!("解析子查询失败: {}，响应内容: {}", e, cleaned))
-            })?;
+        // 定义子查询对象结构（用于解析 {"subquestion": "..."} 格式）
+        #[derive(Deserialize)]
+        struct SubQuery {
+            subquestion: String,
+        }
+        
+        // 尝试解析为字符串数组
+        let sub_queries: Vec<String> = if let Ok(queries) = serde_json::from_str::<Vec<String>>(cleaned) {
+            tracing::debug!("成功解析为字符串数组格式");
+            queries
+        } else if let Ok(queries) = serde_json::from_str::<Vec<SubQuery>>(cleaned) {
+            // 尝试解析为对象数组格式
+            tracing::debug!("成功解析为对象数组格式");
+            queries.into_iter().map(|q| q.subquestion).collect()
+        } else {
+            error!("JSON 解析失败，原始响应: {}", filtered);
+            return Err(AISearchError::Protocol(format!("解析子查询失败，响应内容: {}", cleaned)));
+        };
         
         if sub_queries.is_empty() {
             return Err(AISearchError::Protocol("未能拆分出任何子查询".into()));

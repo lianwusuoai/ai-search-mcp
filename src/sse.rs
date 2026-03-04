@@ -107,6 +107,35 @@ impl SseEventBuilder {
             .event("ping")
             .data(json!({"timestamp": timestamp}).to_string())
     }
+    
+    pub fn split_complete(sub_queries: &[String], duration_ms: u64) -> Event {
+        Event::default()
+            .event("split_complete")
+            .data(json!({
+                "sub_queries": sub_queries,
+                "count": sub_queries.len(),
+                "duration_ms": duration_ms
+            }).to_string())
+    }
+    
+    pub fn progress(completed: usize, total: usize, failed: usize, elapsed_ms: u64) -> Event {
+        let percentage = if total > 0 {
+            (completed as f64 / total as f64 * 100.0) as u32
+        } else {
+            0
+        };
+        
+        Event::default()
+            .event("progress")
+            .data(json!({
+                "completed": completed,
+                "total": total,
+                "failed": failed,
+                "percentage": percentage,
+                "elapsed_ms": elapsed_ms,
+                "status": format!("{}% - 已完成 {}/{} (失败 {})", percentage, completed, total, failed)
+            }).to_string())
+    }
 }
 
 // 心跳任务

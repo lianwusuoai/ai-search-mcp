@@ -19,62 +19,93 @@ fn error_response(id: Option<serde_json::Value>, code: i32, message: String) -> 
     }
 }
 
+// MCP 协议处理器（SSE 模式）
 pub async fn mcp_handler(
     State(state): State<Arc<AppState>>,
     Query(params): Query<std::collections::HashMap<String, String>>,
     Json(request): Json<JsonRpcRequest>,
-) -> Result<StatusCode, (StatusCode, Json<JsonRpcResponse>)> {
+) -> StatusCode {
     let request_id = uuid::Uuid::new_v4();
     
-    let session_id = params.get("session")
-        .ok_or_else(|| {
-            tracing::warn!("MCP 请求失败: 缺少 session 参数 [{}]", request_id);
-            (StatusCode::BAD_REQUEST, Json(error_response(
-                request.id.clone(),
-                error_codes::INVALID_REQUEST,
-                "Missing session parameter".to_string()
-            )))
-        })?;
+    let session_id = match params.get("session") {
+        Some(id) => id,
+        None => {
+            tracing::warn!("MCP SSE 请求失败: 缺少 session 参数");
+            return StatusCode::BAD_REQUEST;
+        }
+    };
     
-    tracing::debug!("MCP 请求: method={}, session={}, id={:?} [{}]", 
+    tracing::info!("MCP SSE 请求: method={}, session={}, id={:?} [{}]", 
         request.method, session_id, request.id, request_id);
     
-    let tx = state.mcp_sessions.get_session(session_id)
-        .ok_or_else(|| {
-            tracing::warn!("MCP 请求失败: session 不存在 [{}]", request_id);
-            (StatusCode::BAD_REQUEST, Json(error_response(
-                request.id.clone(),
-                error_codes::SESSION_NOT_FOUND,
-                "Session not found".to_string()
-            )))
-        })?;
+    let tx = match state.mcp_sessions.get_session(session_id) {
+        Some(tx) => tx,
+        None => {
+            tracing::warn!("MCP SSE 请求失败: session 不存在");
+            return StatusCode::BAD_REQUEST;
+        }
+    };
     
-    // 对于 tools/call，传递 tx 以便发送进度事件
+    // 异步处理请求并通过 SSE 推送响应
+    let state_clone = state.clone();
+    let tx_clone = tx.clone();
+    let method = request.method.clone();
+    
+    tokio::spawn(async move {
+        // 对于 tools/call，传递 tx 以便发送进度事件
+        let response = if method == "tools/call" {
+            handle_mcp_request_with_progress(&state_clone, request, tx_clone.clone()).await
+        } else {
+            handle_mcp_request(request).await
+        };
+        
+        tracing::info!("MCP SSE 响应: method={}, status={}, id={:?} [{}]", 
+            response.jsonrpc, 
+            if response.error.is_some() { "error" } else { "success" },
+            response.id, 
+            request_id);
+        
+        // 通过 SSE 推送响应（标准 MCP SSE 模式）
+        let response_json = serde_json::to_string(&response).unwrap_or_default();
+        let sse_event = axum::response::sse::Event::default()
+            .event("message")
+            .data(response_json);
+        
+        if let Err(e) = tx_clone.send(Ok(sse_event)).await {
+            tracing::warn!("通过 SSE 推送响应失败: {}", e);
+        }
+    });
+    
+    // 立即返回 202 Accepted（响应将通过 SSE 异步推送）
+    StatusCode::ACCEPTED
+}
+
+// MCP 协议处理器（HTTP 模式 - 支持 Cherry Studio 的 streamableHttp）
+pub async fn mcp_http_handler(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<JsonRpcRequest>,
+) -> Result<Json<JsonRpcResponse>, (StatusCode, Json<JsonRpcResponse>)> {
+    let request_id = uuid::Uuid::new_v4();
+    
+    tracing::info!("MCP HTTP 请求: method={}, id={:?} [{}]", 
+        request.method, request.id, request_id);
+    
+    // 对于非 tools/call 请求，同步返回
+    // 对于 tools/call，也同步返回（Cherry Studio 会等待）
     let response = if request.method == "tools/call" {
-        handle_mcp_request_with_progress(&state, request, tx.clone()).await
+        handle_tools_call(&state, request).await
     } else {
         handle_mcp_request(request).await
     };
     
-    let event_data = match serde_json::to_string(&response) {
-        Ok(data) => data,
-        Err(e) => {
-            tracing::error!("序列化 MCP 响应失败: {} [{}]", e, request_id);
-            return Ok(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-    };
+    tracing::info!("MCP HTTP 响应: method={}, status={}, id={:?} [{}]", 
+        response.jsonrpc, 
+        if response.error.is_some() { "error" } else { "success" },
+        response.id, 
+        request_id);
     
-    let event = axum::response::sse::Event::default()
-        .event("message")
-        .data(event_data);
-    
-    if let Err(e) = tx.send(Ok(event)).await {
-        tracing::error!("发送 MCP 响应失败: {} [{}]", e, request_id);
-        return Ok(StatusCode::INTERNAL_SERVER_ERROR);
-    }
-    
-    tracing::debug!("MCP 响应已推送 [{}]", request_id);
-    Ok(StatusCode::ACCEPTED)
+    // 总是返回 200 OK，错误信息在 JSON 中
+    Ok(Json(response))
 }
 
 async fn handle_mcp_request(request: JsonRpcRequest) -> JsonRpcResponse {
@@ -285,12 +316,12 @@ async fn handle_tools_call_with_progress(
                 break;
             }
             
-            tracing::debug!("发送工具执行进度 #{}", count);
+            tracing::trace!("发送工具执行进度 #{}", count);
         }
     });
     
     let ai_client = state.ai_client.read().await;
-    let result = ai_client.search(query).await;
+    let result = ai_client.search_with_progress(query, Some(tx.clone())).await;
     
     // 取消进度任务
     progress_task.abort();

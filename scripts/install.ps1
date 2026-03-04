@@ -75,17 +75,45 @@ function Test-Pip {
     }
 }
 
+# 获取当前版本
+function Get-CurrentVersion {
+    if (Test-Command "ai-search-mcp") {
+        try {
+            $version = ai-search-mcp --version 2>&1 | Select-String -Pattern '\d+\.\d+\.\d+' | ForEach-Object { $_.Matches[0].Value }
+            return $version
+        } catch {
+            return $null
+        }
+    }
+    return $null
+}
+
 # 安装 Python 包
 function Install-Package {
+    # 检查当前版本
+    $currentVersion = Get-CurrentVersion
+    if ($currentVersion) {
+        Write-Info "当前 MCP 版本: $currentVersion"
+    } else {
+        Write-Info "首次安装 ai-search-mcp"
+    }
+    
     Write-Info "安装 ai-search-mcp Python 包..."
     
     try {
-        pip install --upgrade ai-search-mcp
-        Write-Success "Python 包安装成功"
+        pip install --upgrade ai-search-mcp 2>&1 | Out-Null
         
-        # 获取版本
-        $version = ai-search-mcp --version 2>&1 | Select-String -Pattern '\d+\.\d+\.\d+' | ForEach-Object { $_.Matches[0].Value }
-        Write-Info "已安装版本: $version"
+        # 获取新版本
+        $newVersion = ai-search-mcp --version 2>&1 | Select-String -Pattern '\d+\.\d+\.\d+' | ForEach-Object { $_.Matches[0].Value }
+        
+        if ($currentVersion -and $currentVersion -ne $newVersion) {
+            Write-Success "MCP 已升级: $currentVersion → $newVersion"
+        } elseif ($currentVersion) {
+            Write-Success "MCP 已是最新版本: $newVersion"
+        } else {
+            Write-Success "MCP 安装成功: $newVersion"
+        }
+        
         return $true
     } catch {
         Write-Error "Python 包安装失败: $_"
@@ -99,8 +127,11 @@ function Test-Docker {
     
     if (Test-Command "docker") {
         try {
-            docker info | Out-Null
-            Write-Success "Docker 已运行"
+            # 获取 Docker 版本
+            $dockerVersion = docker --version 2>&1 | Select-String -Pattern 'Docker version [\d\.]+' | ForEach-Object { $_.Matches[0].Value }
+            
+            docker info 2>&1 | Out-Null
+            Write-Success "Docker 已运行 ($dockerVersion)"
             return $true
         } catch {
             Write-Warning "Docker 未运行"
@@ -117,7 +148,7 @@ function Clone-Project {
     Write-Info "克隆项目..."
     
     # 默认安装到用户目录
-    $installDir = "$env:USERPROFILE\.ai-search-mcp-project"
+    $installDir = "$env:USERPROFILE\.ai-search-mcp"
     
     if (Test-Path $installDir) {
         Write-Info "项目目录已存在，更新中..."
@@ -141,8 +172,31 @@ function Clone-Project {
     return $true
 }
 
+# 获取 Docker 容器版本
+function Get-DockerVersion {
+    try {
+        $containerExists = docker ps -a --filter "name=ai-search" --format "{{.Names}}" 2>&1
+        if ($containerExists -eq "ai-search") {
+            $imageId = docker inspect ai-search --format "{{.Image}}" 2>&1
+            $imageCreated = docker inspect $imageId --format "{{.Created}}" 2>&1 | Select-String -Pattern '\d{4}-\d{2}-\d{2}' | ForEach-Object { $_.Matches[0].Value }
+            return $imageCreated
+        }
+    } catch {
+        return $null
+    }
+    return $null
+}
+
 # 部署 Docker
 function Deploy-Docker {
+    # 检查当前 Docker 版本
+    $currentDockerVersion = Get-DockerVersion
+    if ($currentDockerVersion) {
+        Write-Info "当前 Docker 镜像: $currentDockerVersion"
+    } else {
+        Write-Info "首次部署 Docker 容器"
+    }
+    
     Write-Info "部署 Docker 容器..."
     
     try {
@@ -151,7 +205,14 @@ function Deploy-Docker {
         
         # 检查退出码
         if ($LASTEXITCODE -eq 0) {
-            Write-Success "Docker 部署成功"
+            $newDockerVersion = Get-DockerVersion
+            if ($currentDockerVersion -and $currentDockerVersion -ne $newDockerVersion) {
+                Write-Success "Docker 已升级: $currentDockerVersion → $newDockerVersion"
+            } elseif ($currentDockerVersion) {
+                Write-Success "Docker 部署成功（镜像未变化）"
+            } else {
+                Write-Success "Docker 部署成功: $newDockerVersion"
+            }
             return $true
         } else {
             Write-Error "Docker 部署失败（退出码: $LASTEXITCODE）"
@@ -168,7 +229,7 @@ function Deploy-Docker {
 function Open-Config {
     Write-Info "打开配置界面..."
     
-    $configUrl = "http://localhost:11000/config"
+    $configUrl = "http://localhost:11000"
     
     try {
         Start-Process $configUrl
@@ -188,7 +249,8 @@ function Show-NextSteps {
     Write-Info "下一步操作："
     Write-Host ""
     Write-Host "1. 配置 AI API（浏览器打开）："
-    Write-Host "   http://localhost:11000/config"
+    Write-Host "   http://localhost:11000"
+    Write-Host "   （需要输入管理员密码进入配置页面）"
     Write-Host ""
     Write-Host "2. 配置 MCP 客户端（编辑配置文件）："
     Write-Host "   Kiro IDE: .kiro/settings/mcp.json"

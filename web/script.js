@@ -69,6 +69,15 @@ async function loadConfig() {
             document.getElementById('http_api_key').value = config.http_api_key || 'xinchen';
             document.getElementById('admin_password').value = config.admin_password || 'xinchen';
             
+            // 新增字段：HTTP 和缓冲区配置（转换为 MB）
+            document.getElementById('http_max_body_size').value = config.http_max_body_size 
+                ? Math.round(config.http_max_body_size / (1024 * 1024)) 
+                : 10;
+            document.getElementById('max_buffer_size').value = config.max_buffer_size 
+                ? Math.round(config.max_buffer_size / (1024 * 1024)) 
+                : 10;
+            document.getElementById('max_query_length').value = config.max_query_length || 10000;
+            
             // 提示词：如果配置为空，显示默认值
             document.getElementById('system_prompt').value = config.system_prompt || DEFAULT_SYSTEM_PROMPT;
             document.getElementById('split_prompt').value = config.split_prompt || DEFAULT_SPLIT_PROMPT;
@@ -110,6 +119,10 @@ document.getElementById('configForm').addEventListener('submit', async (e) => {
         admin_password: formData.get('admin_password'),
         system_prompt: systemPrompt || null,
         split_prompt: splitPrompt || null,
+        // 新增字段：转换 MB 为字节
+        http_max_body_size: parseInt(formData.get('http_max_body_size')) * 1024 * 1024,
+        max_buffer_size: parseInt(formData.get('max_buffer_size')) * 1024 * 1024,
+        max_query_length: parseInt(formData.get('max_query_length')),
     };
     
     try {

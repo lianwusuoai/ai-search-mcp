@@ -149,6 +149,31 @@
                         <small>配置页面登录密码</small>
                     </div>
                 </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="http_max_body_size">HTTP 最大请求体大小 (MB)</label>
+                        <input type="number" id="http_max_body_size" name="http_max_body_size" 
+                               min="1" max="100" value="10">
+                        <small>HTTP 请求体最大大小（1-100 MB）</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="max_buffer_size">最大缓冲区大小 (MB)</label>
+                        <input type="number" id="max_buffer_size" name="max_buffer_size" 
+                               min="1" max="100" value="10">
+                        <small>SSE 流式响应缓冲区大小（1-100 MB）</small>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="max_query_length">最大查询长度</label>
+                        <input type="number" id="max_query_length" name="max_query_length" 
+                               min="100" max="100000" value="10000">
+                        <small>单次查询最大字符数（100-100000）</small>
+                    </div>
+                </div>
             </div>
 
             <div class="actions">

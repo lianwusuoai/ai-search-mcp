@@ -34,6 +34,12 @@ pub struct ConfigFile {
     pub system_prompt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub split_prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_max_body_size: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_buffer_size: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_query_length: Option<usize>,
 }
 
 fn default_timeout() -> u64 { 180 }

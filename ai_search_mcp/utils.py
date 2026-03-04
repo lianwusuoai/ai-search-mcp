@@ -30,10 +30,10 @@ def run_command(
             )
             return result.returncode == 0, result.stdout.strip()
         else:
-            result = subprocess.run(
+            result_bytes = subprocess.run(
                 cmd, shell=True, check=check, timeout=timeout, cwd=cwd
             )
-            return result.returncode == 0, ""
+            return result_bytes.returncode == 0, ""
     except subprocess.TimeoutExpired:
         return False, "命令超时"
     except subprocess.CalledProcessError as e:
@@ -71,8 +71,10 @@ def get_docker_version() -> Optional[str]:
     try:
         import urllib.request
         import json
+        from typing import Any
         with urllib.request.urlopen("http://localhost:11000/health", timeout=2) as response:
-            data = json.loads(response.read().decode())
-            return data.get("version")
+            data: Any = json.loads(response.read().decode())
+            version: Optional[str] = data.get("version")
+            return version
     except Exception:
         return None
