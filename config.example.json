@@ -1,0 +1,18 @@
+{
+  "api_url": "http://host.docker.internal:10000",
+  "api_key": "your-api-key-here",
+  "search_model_id": "Grok",
+  "analysis_model_id": "MiniMax",
+  "timeout": 180,
+  "stream": true,
+  "filter_thinking": true,
+  "retry_count": 1,
+  "analysis_retry_count": 1,
+  "search_retry_count": 0,
+  "log_level": "INFO",
+  "max_query_plan": 10,
+  "http_api_key": "xinchen",
+  "admin_password": "xinchen",
+  "system_prompt": null,
+  "split_prompt": null
+}

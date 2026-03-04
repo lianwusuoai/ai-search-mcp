@@ -105,7 +105,7 @@ pub async fn mcp_sse_handler(
         tracing::debug!("自动发送 tools/list 响应 (session: {})", session_id);
     }
     
-    // 4. 启动心跳任务
+    // 4. 启动心跳任务（使用 SSE 注释格式，符合标准）
     let sessions = state.mcp_sessions.clone();
     let session_id_clone = session_id.clone();
     
@@ -113,14 +113,22 @@ pub async fn mcp_sse_handler(
         let mut ping_count = 0;
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(heartbeat_interval)).await;
+            
             ping_count += 1;
             
+            // 使用 SSE 注释格式（: 开头），这是标准的 keep-alive 方式
+            // 不使用 event 类型，避免客户端需要处理 ping 事件
+            // 注意：不要手动添加 \n，Axum 会自动处理
+            let comment = format!("keep-alive {} {}", 
+                chrono::Utc::now().to_rfc3339(), 
+                ping_count
+            );
+            
             let ping_event = Event::default()
-                .event("ping")
-                .data(json!({"timestamp": chrono::Utc::now().to_rfc3339(), "count": ping_count}).to_string());
+                .comment(&comment);
             
             if tx.send(Ok(ping_event)).await.is_err() {
-                tracing::info!("MCP SSE 连接已关闭 (session_id: {}, 存活时间: {}秒)", 
+                tracing::info!("MCP SSE 连接已关闭 (session_id: {}, 存活时间: ~{}秒)", 
                     session_id_clone, ping_count * heartbeat_interval);
                 sessions.remove_session(&session_id_clone);
                 break;
@@ -130,10 +138,7 @@ pub async fn mcp_sse_handler(
         }
     });
     
-    Ok(Sse::new(ReceiverStream::new(rx))
-        .keep_alive(
-            axum::response::sse::KeepAlive::new()
-                .interval(std::time::Duration::from_secs(15))
-                .text("keep-alive")
-        ))
+    // 不使用 keep_alive，因为我们已经有心跳任务了
+    // keep_alive 会发送注释，可能与心跳冲突
+    Ok(Sse::new(ReceiverStream::new(rx)))
 }

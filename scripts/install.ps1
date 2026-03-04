@@ -1,5 +1,9 @@
 # AI Search MCP - 一键安装脚本（Windows PowerShell）
 
+# 设置控制台编码为 UTF-8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+
 # 设置错误时停止
 $ErrorActionPreference = "Stop"
 
@@ -142,9 +146,18 @@ function Deploy-Docker {
     Write-Info "部署 Docker 容器..."
     
     try {
+        # 执行部署命令并捕获退出码
         ai-search-mcp-deploy
-        Write-Success "Docker 部署成功"
-        return $true
+        
+        # 检查退出码
+        if ($LASTEXITCODE -eq 0) {
+            Write-Success "Docker 部署成功"
+            return $true
+        } else {
+            Write-Error "Docker 部署失败（退出码: $LASTEXITCODE）"
+            Write-Info "请查看上方错误信息"
+            return $false
+        }
     } catch {
         Write-Error "Docker 部署失败: $_"
         return $false

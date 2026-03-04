@@ -6,6 +6,12 @@ import sys
 import argparse
 from pathlib import Path
 from typing import Optional
+import io
+
+# 修复 Windows 控制台编码问题
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 from .utils import run_command, check_docker, get_installed_version, get_docker_version
 def find_project_root() -> Optional[Path]:
@@ -132,6 +138,9 @@ def deploy(force: bool = False, stop: bool = False) -> int:
             print("❌ 部署失败")
             print("💡 查看日志: docker-compose logs")
             return 1
+    
+    # 兜底返回（理论上不会到达这里）
+    return 0
 
 
 def main():

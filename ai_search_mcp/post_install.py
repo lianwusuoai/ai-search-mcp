@@ -3,9 +3,16 @@
 AI Search MCP - 安装后自动部署钩子
 在 pip install 或 pip install --upgrade 后自动检测并部署 Docker
 """
+import sys
 import os
 from pathlib import Path
 from typing import Optional
+import io
+
+# 修复 Windows 控制台编码问题
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 from .utils import run_command, check_docker, get_installed_version, get_docker_version
 
@@ -81,10 +88,11 @@ def auto_deploy_silent() -> None:
             # 停止旧容器
             run_command("docker-compose down", check=False, capture=False, timeout=60)
             
-            # 构建并启动
+            # 构建并启动（使用国内镜像源，速度更快）
+            print("🔨 构建并启动容器（已配置国内镜像源）...")
             success, _ = run_command(
                 "docker-compose up -d --build", 
-                check=False, capture=False, timeout=300
+                check=False, capture=False, timeout=600
             )
             
             if success:
@@ -95,6 +103,7 @@ def auto_deploy_silent() -> None:
                 print("⚠️  Docker 部署失败，请手动运行: ai-search-mcp-deploy")
         except Exception as e:
             print(f"⚠️  部署过程出错: {e}")
+            print("💡 手动部署命令: ai-search-mcp-deploy")
         finally:
             # 恢复原始目录
             os.chdir(original_cwd)

@@ -93,7 +93,7 @@ impl From<ConfigFile> for AIConfig {
             log_level: config_file.log_level,
             max_query_plan: config_file.max_query_plan,
             http_api_key: config_file.http_api_key,
-            // HTTP/SSE 默认值（心跳间隔 5 秒，针对移动网络优化）
+            // HTTP/SSE 默认值（心跳间隔 5 秒，防止客户端超时）
             http_sse_heartbeat: 5,
             http_max_sse_connections: 100,
             http_max_body_size: 10 * 1024 * 1024,
@@ -190,7 +190,7 @@ impl AIConfig {
         let http_sse_heartbeat = env::var("AI_HTTP_SSE_HEARTBEAT")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(5); // 默认 5 秒，针对移动网络优化
+            .unwrap_or(30); // 默认 30 秒，符合 SSE 最佳实践（避免 Cloudflare 100 秒超时）
         
         let http_max_sse_connections = env::var("AI_HTTP_MAX_SSE_CONNECTIONS")
             .ok()
